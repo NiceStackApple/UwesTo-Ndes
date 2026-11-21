@@ -7,6 +7,7 @@ import androidx.room.PrimaryKey
 data class DailyScrollLogEntity(
     @PrimaryKey val dateKey: String, // YYYY-MM-DD in device local timezone
     val instagramCount: Int = 0,
+    val tiktokCount: Int = 0,
     val youtubeCount: Int = 0,
     val facebookCount: Int = 0,
     val snapchatCount: Int = 0,
@@ -17,7 +18,7 @@ data class DailyScrollLogEntity(
     val updatedAt: Long = System.currentTimeMillis()
 ) {
     val totalCount: Int
-        get() = instagramCount + youtubeCount + facebookCount + snapchatCount
+        get() = instagramCount + tiktokCount + youtubeCount + facebookCount + snapchatCount
 
     val isWithinLimit: Boolean
         get() = totalCount <= dailyLimitSnapshot
@@ -32,7 +33,7 @@ data class BlockRuleEntity(
     val startMinute: Int,
     val endHour: Int,
     val endMinute: Int,
-    val targetAppsCsv: String = "instagram,youtube,facebook,snapchat",
+    val targetAppsCsv: String = "instagram,tiktok,youtube,facebook,snapchat",
     val isEnabled: Boolean = false,
     val isStrict: Boolean = false,
     val focusExpiresAtMs: Long = 0L,

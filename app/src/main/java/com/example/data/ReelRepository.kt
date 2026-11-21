@@ -174,6 +174,7 @@ class ReelRepository(
         val previousTotal = existing.totalCount
         val updated = when (app) {
             SupportedApp.INSTAGRAM -> existing.copy(instagramCount = existing.instagramCount + delta)
+            SupportedApp.TIKTOK -> existing.copy(tiktokCount = existing.tiktokCount + delta)
             SupportedApp.YOUTUBE -> existing.copy(youtubeCount = existing.youtubeCount + delta)
             SupportedApp.FACEBOOK -> existing.copy(facebookCount = existing.facebookCount + delta)
             SupportedApp.SNAPCHAT -> existing.copy(snapchatCount = existing.snapchatCount + delta)

@@ -286,7 +286,7 @@ private fun DailyLimitControlCard(
                 Column(modifier = Modifier.weight(1f)) {
                     Text("Pill Counter Melayang (Overlay)", style = MaterialTheme.typography.bodyMedium)
                     Text(
-                        text = "Tampilke angka live cilik nang nduwur IG/YT/FB/SC.",
+                        text = "Tampilke angka gabungan live cilik nang nduwur IG/TikTok/YT/FB/SC.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -434,7 +434,7 @@ private fun BlockRuleCard(
                     Column {
                         Text(rule.name, style = MaterialTheme.typography.titleSmall)
                         Text(
-                            text = "${rule.formattedWindow()} • IG, YT, FB, SC",
+                            text = "${rule.formattedWindow()} • IG, TikTok, YT, FB, SC",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

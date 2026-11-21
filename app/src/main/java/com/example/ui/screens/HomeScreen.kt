@@ -88,10 +88,11 @@ fun HomeScreen(
                 )
             }
 
-            // Per-App Breakdown Card (Instagram, YouTube, Facebook, Snapchat)
+            // Per-App Breakdown Card (Instagram, TikTok, YouTube, Facebook, Snapchat — unified total)
             item {
                 PerAppBreakdownCard(
                     instagramCount = uiState.todayLog.instagramCount,
+                    tiktokCount = uiState.todayLog.tiktokCount,
                     youtubeCount = uiState.todayLog.youtubeCount,
                     facebookCount = uiState.todayLog.facebookCount,
                     snapchatCount = uiState.todayLog.snapchatCount,
@@ -161,6 +162,7 @@ private fun HomeHeaderRow() {
 @Composable
 private fun PerAppBreakdownCard(
     instagramCount: Int,
+    tiktokCount: Int,
     youtubeCount: Int,
     facebookCount: Int,
     snapchatCount: Int,
@@ -168,6 +170,7 @@ private fun PerAppBreakdownCard(
 ) {
     val rows = listOf(
         SupportedApp.INSTAGRAM to instagramCount,
+        SupportedApp.TIKTOK to tiktokCount,
         SupportedApp.YOUTUBE to youtubeCount,
         SupportedApp.FACEBOOK to facebookCount,
         SupportedApp.SNAPCHAT to snapchatCount
@@ -191,12 +194,12 @@ private fun PerAppBreakdownCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Rincian Per Aplikasi",
+                    text = "Gabungan Per Aplikasi",
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
-                    text = "Total: $totalCount",
+                    text = "Total Gabungan: $totalCount",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -281,7 +284,7 @@ private fun LiveMonitoringInfoCard(
             }
 
             Text(
-                text = "Bukak Instagram Reels, YouTube Shorts, Facebook Reels, utawa Snapchat Spotlight koyo biasa. Angka bakal munggah otomatis saben ganti video (chat & komentar aman ora keitung).",
+                text = "Bukak Instagram Reels, TikTok, YouTube Shorts, Facebook Reels, utawa Snapchat Spotlight koyo biasa. Kabeh jumlah scroll bakal digabung dadi siji total harian otomatis (chat & komentar aman ora keitung).",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-    android:accessibilityEventTypes="typeViewScrolled|typeWindowStateChanged"
+    android:accessibilityEventTypes="typeViewScrolled|typeWindowStateChanged|typeViewSelected"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagReportViewIds"
     android:canPerformGestures="false"
     android:canRequestFilterKeyEvents="false"
     android:canRetrieveWindowContent="true"
     android:description="@string/accessibility_service_description"
-    android:notificationTimeout="250"
-    android:packageNames="com.instagram.android,com.instagram.lite,com.google.android.youtube,com.facebook.katana,com.facebook.lite,com.snapchat.android,com.snapchat.lite" />
+    android:notificationTimeout="200"
+    android:packageNames="com.instagram.android,com.instagram.lite,com.zhiliaoapp.musically,com.ss.android.ugc.trill,com.zhiliaoapp.musically.go,com.ss.android.ugc.trill.go,com.google.android.youtube,com.facebook.katana,com.facebook.lite,com.snapchat.android,com.snapchat.lite" />

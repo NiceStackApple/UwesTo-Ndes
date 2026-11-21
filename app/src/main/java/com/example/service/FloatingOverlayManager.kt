@@ -160,7 +160,7 @@ class FloatingOverlayManager(private val context: Context) {
             }
 
             pillCountText?.text = "$todayCount/$dailyLimit"
-            pillAppLabel?.text = "${sourceApp.shortLabel} • ${stage.titleSemarang}"
+            pillAppLabel?.text = "Total (${sourceApp.shortLabel}) • ${stage.titleSemarang}"
             (pillStatusDot?.background as? GradientDrawable)?.setColor(accentInt)
             (pillView?.background as? GradientDrawable)?.setStroke(dp(1), accentInt)
         }

@@ -137,7 +137,7 @@ fun OnboardingScreen(
                     )
                     else -> MandatoryPermissionChecklist(
                         title = "Wajib Aktifke Izin Sik, Ndes",
-                        subtitle = "Supoyo UwesTo iso ngitung scroll asli nang Instagram, YouTube, Facebook, lan Snapchat, aktifke loro izin iki sik baru iso mlebu aplikasi.",
+                        subtitle = "Supoyo UwesTo iso ngitung gabungan scroll asli nang Instagram, TikTok, YouTube Shorts, Facebook, lan Snapchat, aktifke loro izin iki sik baru iso mlebu aplikasi.",
                         health = permissionHealth,
                         onOpenAppInfo = { PermissionHelper.openAppInfoSettings(context) },
                         onOpenAccessibility = { PermissionHelper.openAccessibilitySettings(context) },
@@ -397,7 +397,7 @@ fun MandatoryPermissionChecklist(
                     color = BrainHealthyEmerald
                 )
                 Text(
-                    text = "• Mung aktif nang IG, YouTube, FB, lan Snapchat.\n• ORA tau maca chat, sandi, OTP, isi video, utawa app bank.\n• Data 100% lokal nang HP-mu & ora dikirim nang endi-endi.",
+                    text = "• Mung aktif nang IG, TikTok, YouTube, FB, lan Snapchat.\n• ORA tau maca chat, sandi, OTP, isi video, utawa app bank.\n• Data 100% lokal nang HP-mu & ora dikirim nang endi-endi.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface
                 )

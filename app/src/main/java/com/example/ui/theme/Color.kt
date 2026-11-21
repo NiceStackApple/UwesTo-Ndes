@@ -22,6 +22,7 @@ val BrainLostCrimson = Color(0xFFF04452)
 
 // Per-App Source Brand Accents
 val InstagramAccent = Color(0xFFE1306C)
+val TikTokAccent = Color(0xFF00F2EA)
 val YouTubeAccent = Color(0xFFFF3B30)
 val FacebookAccent = Color(0xFF3B82F6)
 val SnapchatAccent = Color(0xFFFFD60A)

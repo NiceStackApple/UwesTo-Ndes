@@ -11,6 +11,7 @@ import com.example.ui.theme.BrainWitheredViolet
 import com.example.ui.theme.FacebookAccent
 import com.example.ui.theme.InstagramAccent
 import com.example.ui.theme.SnapchatAccent
+import com.example.ui.theme.TikTokAccent
 import com.example.ui.theme.YouTubeAccent
 
 enum class SupportedApp(
@@ -28,6 +29,19 @@ enum class SupportedApp(
         feedName = "Reels",
         packages = listOf("com.instagram.android", "com.instagram.lite"),
         accentColor = InstagramAccent
+    ),
+    TIKTOK(
+        id = "tiktok",
+        displayName = "TikTok",
+        shortLabel = "TT",
+        feedName = "FYP",
+        packages = listOf(
+            "com.zhiliaoapp.musically",
+            "com.ss.android.ugc.trill",
+            "com.zhiliaoapp.musically.go",
+            "com.ss.android.ugc.trill.go"
+        ),
+        accentColor = TikTokAccent
     ),
     YOUTUBE(
         id = "youtube",
@@ -101,27 +115,27 @@ enum class BrainStage(
     RETAK_RETAK(
         minReels = 100,
         badgeCode = "100–149",
-        titleSemarang = "Retak-Retak",
+        titleSemarang = "Rodo Mendem",
         standardLabel = "Retak",
-        remarkSemarang = "Waduh tembus 100+ reels! Fokusmu wis mulai buyar, ojo ngeyel, Ndes.",
+        remarkSemarang = "Waduh tembus 100+ reels! Wis rodo mendem iki, fokusmu mulai buyar, ojo ngeyel, Ndes.",
         accentColor = BrainCrackedCoral,
         imageRes = R.drawable.img_brain_cracked_1795230569029
     ),
     LAYU_KUYU(
         minReels = 150,
         badgeCode = "150–199",
-        titleSemarang = "Layu Kuyu",
+        titleSemarang = "Mendem Tenan",
         standardLabel = "Layu Abu-abu",
-        remarkSemarang = "150+ reels?! Otakmu wis kuyu abu-abu lho, uwes to mbok leren sik!",
+        remarkSemarang = "150+ reels?! Wis mendem tenan kowe, Ndes! Uwes to mbok leren sik!",
         accentColor = BrainWitheredViolet,
         imageRes = R.drawable.img_brain_withered_1795230570532
     ),
     ILANG_BLASS(
         minReels = 200,
         badgeCode = "200+",
-        titleSemarang = "Ilang Blass",
+        titleSemarang = "Wes Edan Ki",
         standardLabel = "Hilang",
-        remarkSemarang = "200+ reels bablas tenan ik! Otake ngilang, uwes to ndang selehke HP-ne!",
+        remarkSemarang = "200+ reels bablas tenan! Wes edan ki, ndang selehke HP-ne saiki!",
         accentColor = BrainLostCrimson,
         imageRes = null // Rendered with custom animated dissolve/glitch Canvas
     );

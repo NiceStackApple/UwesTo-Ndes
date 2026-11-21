@@ -322,9 +322,9 @@ private fun VanishedBrainGlitchCanvas(
             )
             Spacer(modifier = Modifier.width(2.dp))
             Text(
-                text = "ILANG",
+                text = "EDAN KI",
                 style = MaterialTheme.typography.labelSmall,
-                color = Color.White.copy(alpha = 0.8f)
+                color = Color.White.copy(alpha = 0.85f)
             )
         }
     }
