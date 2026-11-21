@@ -115,18 +115,18 @@ enum class BrainStage(
     RETAK_RETAK(
         minReels = 100,
         badgeCode = "100–149",
-        titleSemarang = "Rodo Mendem",
+        titleSemarang = "Rodo Ra Waras",
         standardLabel = "Retak",
-        remarkSemarang = "Waduh tembus 100+ reels! Wis rodo mendem iki, fokusmu mulai buyar, ojo ngeyel, Ndes.",
+        remarkSemarang = "Waduh tembus 100+ reels! Wis rodo ra waras iki, fokusmu mulai buyar, ojo ngeyel, Ndes.",
         accentColor = BrainCrackedCoral,
         imageRes = R.drawable.img_brain_cracked_1795230569029
     ),
     LAYU_KUYU(
         minReels = 150,
         badgeCode = "150–199",
-        titleSemarang = "Mendem Tenan",
+        titleSemarang = "Wes Ra Waras",
         standardLabel = "Layu Abu-abu",
-        remarkSemarang = "150+ reels?! Wis mendem tenan kowe, Ndes! Uwes to mbok leren sik!",
+        remarkSemarang = "150+ reels?! Wes ra waras tenan kowe, Ndes! Uwes to mbok leren sik!",
         accentColor = BrainWitheredViolet,
         imageRes = R.drawable.img_brain_withered_1795230570532
     ),
