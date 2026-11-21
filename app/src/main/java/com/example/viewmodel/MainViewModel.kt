@@ -13,12 +13,9 @@ import com.example.data.PermissionEventEntity
 import com.example.data.ReelRepository
 import com.example.data.UserSettings
 import com.example.model.ActiveInterception
-import com.example.model.BlockRuleType
 import com.example.model.BrainStage
 import com.example.model.PermissionHealth
 import com.example.model.StreakSummary
-import com.example.model.SupportedApp
-import com.example.service.FloatingOverlayManager
 import com.example.service.PermissionHelper
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,7 +23,6 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -39,8 +35,6 @@ data class UwesToUiState(
     val battleRivals: List<BattleRivalEntity> = emptyList(),
     val permissionEvents: List<PermissionEventEntity> = emptyList(),
     val permissionHealth: PermissionHealth = PermissionHealth(),
-    val selectedTestApp: SupportedApp = SupportedApp.INSTAGRAM,
-    val isTestOverlayVisible: Boolean = false,
     val activeInterception: ActiveInterception = ActiveInterception.None,
     val streakSummary: StreakSummary = StreakSummary(),
     val isLoaded: Boolean = false
@@ -63,10 +57,6 @@ class MainViewModel(
     private val repository: ReelRepository
 ) : AndroidViewModel(application) {
 
-    private val overlayManager = FloatingOverlayManager(application.applicationContext)
-
-    private val _selectedTestApp = MutableStateFlow(SupportedApp.INSTAGRAM)
-    private val _isTestOverlayVisible = MutableStateFlow(false)
     private val _activeInterception = MutableStateFlow<ActiveInterception>(ActiveInterception.None)
     private val _permissionHealth = MutableStateFlow(
         PermissionHelper.checkHealth(
@@ -88,22 +78,14 @@ class MainViewModel(
         BaseSnapshot(settings, todayLog, recentLogs, rules, rivals)
     }
 
-    private val transientFlow = combine(
-        repository.permissionEventsFlow,
-        _permissionHealth,
-        _selectedTestApp,
-        _isTestOverlayVisible,
-        _activeInterception
-    ) { events, health, testApp, overlayShown, interception ->
-        TransientSnapshot(events, health, testApp, overlayShown, interception)
-    }
-
     val uiState: StateFlow<UwesToUiState> = combine(
         baseDataFlow,
-        transientFlow,
+        repository.permissionEventsFlow,
+        _permissionHealth,
+        _activeInterception,
         repository.isAccessibilityServiceConnected
-    ) { base, transient, serviceConnected ->
-        val updatedHealth = transient.health.copy(isServiceConnected = serviceConnected)
+    ) { base, events, health, interception, serviceConnected ->
+        val updatedHealth = health.copy(isServiceConnected = serviceConnected)
         val streak = repository.computeStreakSummary(
             logs = base.recentLogs,
             streakStartDate = base.settings.streakStartDate
@@ -114,11 +96,9 @@ class MainViewModel(
             recentLogs = base.recentLogs,
             blockRules = base.rules,
             battleRivals = base.rivals,
-            permissionEvents = transient.events,
+            permissionEvents = events,
             permissionHealth = updatedHealth,
-            selectedTestApp = transient.testApp,
-            isTestOverlayVisible = transient.overlayShown,
-            activeInterception = transient.interception,
+            activeInterception = interception,
             streakSummary = streak,
             isLoaded = true
         )
@@ -175,107 +155,14 @@ class MainViewModel(
     }
 
     fun completeOnboarding(initialLimit: Int) {
-        viewModelScope.launch {
-            repository.completeOnboarding(initialLimit)
-            _snackbarMessages.tryEmit("Sip Ndes! Limit harian diset $initialLimit reels. Gas jaga otakmu!")
-        }
-    }
-
-    fun selectTestApp(app: SupportedApp) {
-        _selectedTestApp.value = app
-    }
-
-    fun simulateScroll(delta: Int = 1) {
-        viewModelScope.launch {
-            val app = _selectedTestApp.value
-            val result = repository.incrementScroll(app = app, delta = delta, triggerInterceptions = true)
-            if (_isTestOverlayVisible.value) {
-                overlayManager.showOrUpdateCounterPill(
-                    todayCount = result.newTotal,
-                    dailyLimit = result.dailyLimit,
-                    sourceApp = app
-                )
-            }
-            if (result.nearLimitWarning) {
-                _snackbarMessages.tryEmit(
-                    "Awas Ndes! Wis ${result.newTotal}/${result.dailyLimit} reels, meh entek kuotane!"
-                )
-            }
-            if (result.interception !is ActiveInterception.None) {
-                _activeInterception.value = result.interception
-            }
-        }
-    }
-
-    fun resetTodayCount() {
-        viewModelScope.launch {
-            repository.resetTodayCount()
-            _activeInterception.value = ActiveInterception.None
-            if (_isTestOverlayVisible.value) {
-                overlayManager.showOrUpdateCounterPill(
-                    todayCount = 0,
-                    dailyLimit = uiState.value.settings.dailyLimit,
-                    sourceApp = _selectedTestApp.value
-                )
-            }
-            _snackbarMessages.tryEmit("Hitungan dino iki wis direset dadi 0. Otak seger maneh, Ndes!")
-        }
-    }
-
-    fun toggleTestOverlayPill() {
-        val ctx = getApplication<Application>().applicationContext
-        if (!PermissionHelper.isOverlayPermissionGranted(ctx)) {
-            _snackbarMessages.tryEmit("Aktifke izin 'Tampil di atas aplikasi lain' sik ben pill iso melayang, Ndes.")
-            PermissionHelper.openOverlaySettings(ctx)
+        if (!_permissionHealth.value.isFullyHealthy) {
+            _snackbarMessages.tryEmit("Aktifke izin Accessibility lan Overlay sik baru iso mlebu, Ndes!")
             return
         }
-        val next = !_isTestOverlayVisible.value
-        _isTestOverlayVisible.value = next
-        if (next) {
-            overlayManager.showOrUpdateCounterPill(
-                todayCount = uiState.value.todayTotal,
-                dailyLimit = uiState.value.settings.dailyLimit,
-                sourceApp = _selectedTestApp.value
-            )
-            _snackbarMessages.tryEmit("Pill overlay uji coba aktif! Iso mbok seret nang pinggir layar.")
-        } else {
-            overlayManager.hideCounterPill()
-            _snackbarMessages.tryEmit("Pill overlay uji coba ditutup.")
+        viewModelScope.launch {
+            repository.completeOnboarding(initialLimit)
+            _snackbarMessages.tryEmit("Sip Ndes! Izin lengkap & limit diset $initialLimit reels. Gas jaga otakmu!")
         }
-    }
-
-    fun previewBlockerModal() {
-        val state = uiState.value
-        val activeAllDay = state.blockRules.firstOrNull {
-            it.type == BlockRuleType.ALL_DAY.name && it.isEnabled
-        }
-        _activeInterception.value = if (activeAllDay != null) {
-            ActiveInterception.RuleBlocked(
-                ruleId = activeAllDay.id,
-                ruleName = activeAllDay.name,
-                ruleType = BlockRuleType.ALL_DAY,
-                isStrict = activeAllDay.isStrict,
-                timeWindowLabel = activeAllDay.formattedWindow(),
-                sourceApp = _selectedTestApp.value,
-                todayCount = state.todayTotal,
-                dailyLimit = state.settings.dailyLimit
-            )
-        } else {
-            ActiveInterception.LimitReached(
-                todayCount = state.todayTotal.coerceAtLeast(state.settings.dailyLimit),
-                dailyLimit = state.settings.dailyLimit,
-                sourceApp = _selectedTestApp.value
-            )
-        }
-    }
-
-    fun previewBreakModal() {
-        val state = uiState.value
-        _activeInterception.value = ActiveInterception.BreakPause(
-            triggerCount = state.todayTotal.coerceAtLeast(state.settings.breakEveryReels),
-            durationSeconds = state.settings.breakDurationSeconds,
-            sourceApp = _selectedTestApp.value
-        )
     }
 
     fun dismissInterception(wasSkippedBreak: Boolean = false) {
@@ -412,25 +299,12 @@ class MainViewModel(
         }
     }
 
-    override fun onCleared() {
-        overlayManager.releaseAll()
-        super.onCleared()
-    }
-
     private data class BaseSnapshot(
         val settings: UserSettings,
         val todayLog: DailyScrollLogEntity,
         val recentLogs: List<DailyScrollLogEntity>,
         val rules: List<BlockRuleEntity>,
         val rivals: List<BattleRivalEntity>
-    )
-
-    private data class TransientSnapshot(
-        val events: List<PermissionEventEntity>,
-        val health: PermissionHealth,
-        val testApp: SupportedApp,
-        val overlayShown: Boolean,
-        val interception: ActiveInterception
     )
 
     companion object {

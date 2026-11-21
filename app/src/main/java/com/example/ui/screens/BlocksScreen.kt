@@ -71,8 +71,6 @@ fun BlocksScreen(
     onToggleBlockRuleStrict: (BlockRuleEntity, Boolean) -> Unit,
     onAddCustomBlock: (String, Int, Int, Int, Int, Boolean) -> Unit,
     onDeleteBlockRule: (BlockRuleEntity) -> Unit,
-    onPreviewBlocker: () -> Unit,
-    onPreviewBreak: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var showAddDialog by remember { mutableStateOf(false) }
@@ -124,8 +122,7 @@ fun BlocksScreen(
                     enabled = uiState.settings.breakEnabled,
                     everyReels = uiState.settings.breakEveryReels,
                     durationSec = uiState.settings.breakDurationSeconds,
-                    onSetBreakConfig = onSetBreakConfig,
-                    onPreviewBreak = onPreviewBreak
+                    onSetBreakConfig = onSetBreakConfig
                 )
             }
 
@@ -171,27 +168,6 @@ fun BlocksScreen(
                     onToggleStrict = { onToggleBlockRuleStrict(rule, it) },
                     onDelete = { onDeleteBlockRule(rule) }
                 )
-            }
-
-            // Preview Blocker Screen button
-            item {
-                OutlinedButton(
-                    onClick = onPreviewBlocker,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(50.dp)
-                        .testTag("blocks_preview_blocker_button"),
-                    border = BorderStroke(1.dp, BrainCrackedCoral.copy(alpha = 0.6f))
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Block,
-                        contentDescription = null,
-                        tint = BrainCrackedCoral,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Pratinjau Layar Blokir & Tantangan 15 Detik", color = BrainCrackedCoral)
-                }
             }
 
             item { Spacer(modifier = Modifier.height(12.dp)) }
@@ -326,8 +302,7 @@ private fun BreaksConfigCard(
     enabled: Boolean,
     everyReels: Int,
     durationSec: Int,
-    onSetBreakConfig: (Boolean, Int, Int) -> Unit,
-    onPreviewBreak: () -> Unit
+    onSetBreakConfig: (Boolean, Int, Int) -> Unit
 ) {
     Surface(
         shape = MaterialTheme.shapes.large,
@@ -409,15 +384,6 @@ private fun BreaksConfigCard(
                         modifier = Modifier.weight(1f)
                     )
                 }
-            }
-
-            OutlinedButton(
-                onClick = onPreviewBreak,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("preview_break_button")
-            ) {
-                Text("Tes Layar Jeda Saiki")
             }
         }
     }

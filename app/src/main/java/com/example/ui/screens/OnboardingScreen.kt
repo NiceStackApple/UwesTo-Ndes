@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AccessibilityNew
+import androidx.compose.material.icons.rounded.AdminPanelSettings
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Layers
 import androidx.compose.material.icons.rounded.Lock
@@ -35,7 +36,6 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -46,6 +46,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -59,6 +60,7 @@ import com.example.model.PermissionHealth
 import com.example.service.PermissionHelper
 import com.example.ui.theme.BrainHealthyEmerald
 import com.example.ui.theme.BrainTiredAmber
+import com.example.ui.theme.InfoCyan
 import kotlin.math.roundToInt
 
 @Composable
@@ -91,7 +93,7 @@ fun OnboardingScreen(
                 .fillMaxSize(),
             verticalArrangement = Arrangement.SpaceBetween
         ) {
-            // Top bar with progress dots + Skip button (never traps the user)
+            // Top step indicator (no skip button — user must grant permissions to enter)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -111,21 +113,20 @@ fun OnboardingScreen(
                         )
                     }
                 }
-                TextButton(
-                    onClick = { onFinish(selectedLimit) },
-                    modifier = Modifier.testTag("onboarding_skip_button")
-                ) {
-                    Text(stringResource(R.string.onboarding_skip))
-                }
+                Text(
+                    text = "Langkah ${step + 1}/3",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
 
-            // Middle content
+            // Step content
             Column(
                 modifier = Modifier
                     .weight(1f)
                     .verticalScroll(rememberScrollState())
                     .padding(vertical = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(18.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 when (step) {
@@ -134,8 +135,11 @@ fun OnboardingScreen(
                         selectedLimit = selectedLimit,
                         onLimitChange = { selectedLimit = it }
                     )
-                    else -> OnboardingStepPermissions(
+                    else -> MandatoryPermissionChecklist(
+                        title = "Wajib Aktifke Izin Sik, Ndes",
+                        subtitle = "Supoyo UwesTo iso ngitung scroll asli nang Instagram, YouTube, Facebook, lan Snapchat, aktifke loro izin iki sik baru iso mlebu aplikasi.",
                         health = permissionHealth,
+                        onOpenAppInfo = { PermissionHelper.openAppInfoSettings(context) },
                         onOpenAccessibility = { PermissionHelper.openAccessibilitySettings(context) },
                         onOpenOverlay = { PermissionHelper.openOverlaySettings(context) }
                     )
@@ -167,6 +171,7 @@ fun OnboardingScreen(
                 } else {
                     Button(
                         onClick = { onFinish(selectedLimit) },
+                        enabled = permissionHealth.isFullyHealthy,
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(54.dp)
@@ -177,7 +182,7 @@ fun OnboardingScreen(
                         )
                     ) {
                         Icon(
-                            imageVector = Icons.Rounded.PlayArrow,
+                            imageVector = if (permissionHealth.isFullyHealthy) Icons.Rounded.PlayArrow else Icons.Rounded.Lock,
                             contentDescription = null,
                             modifier = Modifier.size(20.dp)
                         )
@@ -186,7 +191,7 @@ fun OnboardingScreen(
                             text = if (permissionHealth.isFullyHealthy) {
                                 stringResource(R.string.onboarding_start)
                             } else {
-                                stringResource(R.string.onboarding_try_sim)
+                                stringResource(R.string.onboarding_locked_cta)
                             },
                             style = MaterialTheme.typography.labelLarge
                         )
@@ -203,7 +208,7 @@ private fun OnboardingStepIntro() {
         painter = painterResource(id = R.drawable.img_brain_healthy_1795230570721),
         contentDescription = "Ilustrasi otak sehat UwesTo",
         modifier = Modifier
-            .size(148.dp)
+            .size(144.dp)
             .clip(RoundedCornerShape(30.dp)),
         contentScale = ContentScale.Crop
     )
@@ -345,20 +350,23 @@ private fun OnboardingStepLimit(
 }
 
 @Composable
-private fun OnboardingStepPermissions(
+fun MandatoryPermissionChecklist(
+    title: String,
+    subtitle: String,
     health: PermissionHealth,
+    onOpenAppInfo: () -> Unit,
     onOpenAccessibility: () -> Unit,
     onOpenOverlay: () -> Unit
 ) {
     Text(
-        text = "Izin Jujur & Transparan",
+        text = title,
         style = MaterialTheme.typography.displayMedium,
         color = MaterialTheme.colorScheme.onSurface,
         textAlign = TextAlign.Center
     )
 
     Text(
-        text = "Supoyo UwesTo iso ngitung scroll asli nang Instagram, YouTube, Facebook, lan Snapchat, butuh 2 izin Android iki. Iso mbok lewati sik nek meh jajal Mode Uji Coba.",
+        text = subtitle,
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         textAlign = TextAlign.Center
@@ -389,7 +397,7 @@ private fun OnboardingStepPermissions(
                     color = BrainHealthyEmerald
                 )
                 Text(
-                    text = "• Mung aktif nang IG, YouTube, FB, lan Snapchat.\n• ORA tau maca chat, sandi, OTP, isi video, utawa app bank.\n• Data disimpen lokal nang HP-mu tok & iso dicabut kapan wae nang Pengaturan Android.",
+                    text = "• Mung aktif nang IG, YouTube, FB, lan Snapchat.\n• ORA tau maca chat, sandi, OTP, isi video, utawa app bank.\n• Data 100% lokal nang HP-mu & ora dikirim nang endi-endi.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface
                 )
@@ -397,10 +405,58 @@ private fun OnboardingStepPermissions(
         }
     }
 
+    // Android 13+ Sideloaded APK "Controlled by Restricted Setting" Helper Card
+    if (!health.isAccessibilityEnabled) {
+        Surface(
+            shape = MaterialTheme.shapes.medium,
+            color = InfoCyan.copy(alpha = 0.10f),
+            border = BorderStroke(1.dp, InfoCyan.copy(alpha = 0.45f)),
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("restricted_setting_guide_card")
+        ) {
+            Column(
+                modifier = Modifier.padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.AdminPanelSettings,
+                        contentDescription = null,
+                        tint = InfoCyan,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Text(
+                        text = "Kena 'App was denied access' / Setelan Terbatas?",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = InfoCyan
+                    )
+                }
+                Text(
+                    text = "Khusus APK sing diinstal langsung (dudu soko Play Store), Android 13+ otomatis ngunci Accessibility.\nCarane mbukak (10 detik):\n1. Pencet tombol 'Buka Info Aplikasi' nang ngisor.\n2. Pencet titik telu (⋮) nang pojok kanan nduwur (utawa gulir ngisor).\n3. Pilih 'Izinkan setelan terbatas / Allow restricted settings'.\n4. Balik mrene lan uripke Accessibility UwesTo.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                OutlinedButton(
+                    onClick = onOpenAppInfo,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("open_app_info_button"),
+                    border = BorderStroke(1.dp, InfoCyan.copy(alpha = 0.65f))
+                ) {
+                    Text("Buka Info Aplikasi (Izinkan Setelan Terbatas)", color = InfoCyan)
+                }
+            }
+        }
+    }
+
     PermissionSetupCard(
         icon = Icons.Rounded.AccessibilityNew,
-        title = "1. Accessibility Service",
-        description = "Ngitung tiap scroll feed Reels/Shorts lan mbedakke karo chat.",
+        title = "1. Accessibility Service (Wajib)",
+        description = "Ngitung scroll feed Reels/Shorts secara presisi (chat & komentar ora keitung).",
         isGranted = health.isAccessibilityEnabled,
         buttonText = "Bukak Pengaturan Accessibility",
         testTag = "onboarding_accessibility_button",
@@ -409,7 +465,7 @@ private fun OnboardingStepPermissions(
 
     PermissionSetupCard(
         icon = Icons.Rounded.Layers,
-        title = "2. Tampil di Atas Aplikasi Lain",
+        title = "2. Tampil di Atas Aplikasi Lain (Wajib)",
         description = "Nampilke pill angka live cilik sing iso digeser nang pinggir layar.",
         isGranted = health.isOverlayEnabled,
         buttonText = "Aktifke Izin Overlay",
@@ -420,7 +476,7 @@ private fun OnboardingStepPermissions(
 
 @Composable
 private fun PermissionSetupCard(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: ImageVector,
     title: String,
     description: String,
     isGranted: Boolean,
@@ -433,7 +489,7 @@ private fun PermissionSetupCard(
         color = MaterialTheme.colorScheme.surface,
         border = BorderStroke(
             1.dp,
-            if (isGranted) BrainHealthyEmerald.copy(alpha = 0.5f) else MaterialTheme.colorScheme.outline
+            if (isGranted) BrainHealthyEmerald.copy(alpha = 0.55f) else MaterialTheme.colorScheme.outline
         ),
         modifier = Modifier.fillMaxWidth()
     ) {
@@ -457,13 +513,17 @@ private fun PermissionSetupCard(
                 }
             }
             if (!isGranted) {
-                OutlinedButton(
+                Button(
                     onClick = onClick,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .testTag(testTag)
+                        .testTag(testTag),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = BrainTiredAmber,
+                        contentColor = Color(0xFF211400)
+                    )
                 ) {
-                    Text(buttonText)
+                    Text(buttonText, style = MaterialTheme.typography.labelLarge)
                 }
             } else {
                 Text(

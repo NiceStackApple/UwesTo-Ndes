@@ -1,7 +1,7 @@
 <resources>
     <string name="app_name">UwesTo</string>
     <string name="accessibility_service_label">UwesTo — Penghitung Reels</string>
-    <string name="accessibility_service_description">Mendeteksi jumlah scroll Reels dan Shorts secara live di Instagram, YouTube, Facebook, dan Snapchat saja. UwesTo ora pernah maca chat, sandi, OTP, utawa isi tontonanmu.</string>
+    <string name="accessibility_service_description">Mung ngitung pergantian scroll feed Reels/Shorts nang Instagram, YouTube, Facebook, lan Snapchat. Ora tau maca chat, sandi, OTP, utawa aplikasi bank.</string>
 
     <!-- Navigation -->
     <string name="nav_home">Beranda</string>
@@ -10,10 +10,9 @@
     <string name="nav_battles">Battle</string>
 
     <!-- Onboarding -->
-    <string name="onboarding_skip">Lewati sik</string>
     <string name="onboarding_next">Lanjut, Ndes</string>
     <string name="onboarding_start">Gas Mulai!</string>
-    <string name="onboarding_try_sim">Coba Dulu Pakai Mode Uji</string>
+    <string name="onboarding_locked_cta">Aktifke Kabeh Izin Sik Kanggo Mlebu</string>
 
     <!-- Disclaimer -->
     <string name="non_medical_disclaimer">Visual otak iki mung metafora kebiasaan scrolling ben kowe sadar, dudu diagnosis medis utawa kesehatan mental lho, Ndes.</string>

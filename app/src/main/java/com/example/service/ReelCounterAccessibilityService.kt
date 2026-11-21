@@ -21,13 +21,15 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 
 /**
  * Strictly scoped AccessibilityService monitoring ONLY the 7 supported short-video packages:
  * Instagram (+Lite), YouTube, Facebook (+Lite), and Snapchat (+Lite).
  *
- * Privacy guarantee (per PRD): never reads chat messages, typed text, passwords, OTPs,
- * video content, or banking apps. Only detects short-video feed scroll transitions.
+ * Calibrated scroll detection:
+ * - Ignores micro-scrolls, comment sheets, DMs, search, and non-feed screens.
+ * - Uses 1250ms debounce + minimum scroll delta / pager index check to prevent over-counting.
  */
 class ReelCounterAccessibilityService : AccessibilityService() {
 
@@ -38,6 +40,7 @@ class ReelCounterAccessibilityService : AccessibilityService() {
     private var lastScrollEventMs: Long = 0L
     private var lastScrollSignature: String = ""
     private var lastScrollIndex: Int = -1
+    private var lastScrollY: Int = -1
     private var lastBlockerShownMs: Long = 0L
 
     override fun onServiceConnected() {
@@ -61,6 +64,8 @@ class ReelCounterAccessibilityService : AccessibilityService() {
         if (app == null) {
             if (currentSupportedApp != null) {
                 currentSupportedApp = null
+                lastScrollIndex = -1
+                lastScrollY = -1
                 overlayManager.hideCounterPill()
                 overlayManager.hideBlockerOverlay()
             }
@@ -71,18 +76,22 @@ class ReelCounterAccessibilityService : AccessibilityService() {
 
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
+                if (currentSupportedApp != app) {
+                    lastScrollIndex = -1
+                    lastScrollY = -1
+                }
                 currentSupportedApp = app
-                val inShortFeed = isLikelyShortVideoFeed(app, event, rootInActiveWindow)
+                val inShortFeed = isConfirmedShortVideoFeed(app, event, rootInActiveWindow)
                 serviceScope.launch {
                     val settings = repository.settingsFlow.first()
                     val todayLog = repository.todayLogFlow.first()
-                    if (settings.floatingOverlayEnabled) {
+                    if (settings.floatingOverlayEnabled && inShortFeed) {
                         overlayManager.showOrUpdateCounterPill(
                             todayCount = todayLog.totalCount,
                             dailyLimit = settings.dailyLimit,
                             sourceApp = app
                         )
-                    } else {
+                    } else if (!inShortFeed) {
                         overlayManager.hideCounterPill()
                     }
                     if (inShortFeed) {
@@ -96,23 +105,39 @@ class ReelCounterAccessibilityService : AccessibilityService() {
 
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
                 currentSupportedApp = app
-                if (!isLikelyShortVideoFeed(app, event, rootInActiveWindow)) return
+                if (!isConfirmedShortVideoFeed(app, event, rootInActiveWindow)) return
 
-                // Deduplicate micro-scrolls and backward/duplicate scroll events
+                // Reject horizontal carousels (e.g., Stories/photo carousels) — Reels/Shorts scroll vertically
+                if (event.scrollDeltaX != 0 && abs(event.scrollDeltaX) > abs(event.scrollDeltaY)) {
+                    return
+                }
+
+                // Calibrated anti-oversensitivity filter
                 val now = System.currentTimeMillis()
+                val elapsedMs = now - lastScrollEventMs
+                if (elapsedMs < MIN_REEL_INTERVAL_MS) return
+
                 val fromIndex = event.fromIndex
                 val scrollY = event.scrollY
-                val signature = "${app.id}:$fromIndex:$scrollY"
-                val isForwardOrNewItem = fromIndex == -1 || fromIndex > lastScrollIndex || (now - lastScrollEventMs) > 2200L
-                val passedDebounce = (now - lastScrollEventMs) >= 850L
+                val deltaY = abs(event.scrollDeltaY)
 
-                if (!passedDebounce || !isForwardOrNewItem || signature == lastScrollSignature) {
+                // Ignore tiny micro-scrolls or rubber-band bounce inside the same reel
+                val hasMeaningfulIndexJump = fromIndex >= 0 && lastScrollIndex >= 0 && fromIndex > lastScrollIndex
+                val hasMeaningfulPixelSwipe = deltaY >= MIN_VERTICAL_SWIPE_PX ||
+                    (scrollY >= 0 && lastScrollY >= 0 && abs(scrollY - lastScrollY) >= MIN_VERTICAL_SWIPE_PX)
+                val isFirstScrollInSession = lastScrollIndex == -1 && lastScrollY == -1
+
+                val signature = "${app.id}:$fromIndex:$scrollY"
+                if (signature == lastScrollSignature && elapsedMs < 3500L) return
+
+                if (!isFirstScrollInSession && !hasMeaningfulIndexJump && !hasMeaningfulPixelSwipe) {
                     return
                 }
 
                 lastScrollEventMs = now
                 lastScrollSignature = signature
                 if (fromIndex >= 0) lastScrollIndex = fromIndex
+                if (scrollY >= 0) lastScrollY = scrollY
 
                 serviceScope.launch {
                     val result = repository.incrementScroll(app = app, delta = 1)
@@ -139,44 +164,40 @@ class ReelCounterAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Heuristic distinguishing short-video feeds (Reels / Shorts / Spotlight) from
-     * non-feed areas like DMs, Chat, Profile, or Search so core app features remain usable.
+     * Strict short-video feed check so regular feeds, comments, DMs, profiles, and search
+     * are NOT counted accidentally.
      */
-    private fun isLikelyShortVideoFeed(
+    private fun isConfirmedShortVideoFeed(
         app: SupportedApp,
         event: AccessibilityEvent,
         root: AccessibilityNodeInfo?
     ): Boolean {
         val className = event.className?.toString()?.lowercase().orEmpty()
         val contentDesc = event.contentDescription?.toString()?.lowercase().orEmpty()
-        val combinedMeta = "$className $contentDesc"
+        val sourceId = event.source?.viewIdResourceName?.lowercase().orEmpty()
+        val combinedMeta = "$className $contentDesc $sourceId"
 
-        // Explicitly skip messaging / chat / search / profile screens
-        if (combinedMeta.contains("direct") ||
-            combinedMeta.contains("inbox") ||
-            combinedMeta.contains("chat") ||
-            combinedMeta.contains("message") ||
-            combinedMeta.contains("search")
-        ) {
+        // Explicitly reject non-reel UIs (comments, DMs, chat, search, notifications, settings)
+        val excludedTokens = listOf(
+            "direct", "inbox", "chat", "message", "comment",
+            "search", "notification", "profile", "setting", "share_sheet"
+        )
+        if (excludedTokens.any { combinedMeta.contains(it) }) {
             return false
         }
 
-        // Check known short-video container markers in view IDs or vertical pagers
-        val isPagerLike = className.contains("viewpager") ||
-            className.contains("recyclerview") ||
-            className.contains("reels") ||
-            className.contains("shorts")
-
-        if (root == null) return isPagerLike
-
         val markers = when (app) {
-            SupportedApp.INSTAGRAM -> listOf("clips_viewer", "reel", "reels")
-            SupportedApp.YOUTUBE -> listOf("reel_watch", "shorts", "reel_recycler")
-            SupportedApp.FACEBOOK -> listOf("reels", "fb_shorts", "short_form_video")
+            SupportedApp.INSTAGRAM -> listOf("clips_viewer", "clips_video", "reels_viewer", "reel_viewer")
+            SupportedApp.YOUTUBE -> listOf("reel_watch", "reel_recycler", "shorts_player", "reel_player")
+            SupportedApp.FACEBOOK -> listOf("reels_viewer", "fb_shorts", "short_form_video")
             SupportedApp.SNAPCHAT -> listOf("spotlight", "opera_view")
         }
 
-        return hasMatchingViewId(root, markers, depth = 0) || isPagerLike
+        if (markers.any { sourceId.contains(it) }) return true
+        if (root != null && hasMatchingViewId(root, markers, depth = 0)) return true
+
+        // Fallback only for vertical full-screen ViewPager (not generic RecyclerView lists)
+        return className.contains("viewpager")
     }
 
     private fun hasMatchingViewId(
@@ -204,7 +225,6 @@ class ReelCounterAccessibilityService : AccessibilityService() {
         overlayManager.showBlockerOverlay(
             interception = interception,
             onExitFeed = {
-                // Exit short-video feed back to previous screen without force-killing messages
                 performGlobalAction(GLOBAL_ACTION_BACK)
             },
             onDismissOverlay = {
@@ -270,5 +290,10 @@ class ReelCounterAccessibilityService : AccessibilityService() {
             .build()
 
         manager.notify(4201, notification)
+    }
+
+    companion object {
+        private const val MIN_REEL_INTERVAL_MS = 1250L
+        private const val MIN_VERTICAL_SWIPE_PX = 180
     }
 }

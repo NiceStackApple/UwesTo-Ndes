@@ -50,6 +50,7 @@ import com.example.ui.screens.BattlesScreen
 import com.example.ui.screens.BlocksScreen
 import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.OnboardingScreen
+import com.example.ui.screens.PermissionGateScreen
 import com.example.ui.screens.StatsScreen
 import com.example.viewmodel.MainViewModel
 import kotlinx.coroutines.flow.collectLatest
@@ -79,7 +80,7 @@ fun UwesToApp(viewModel: MainViewModel) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
 
-    // Automatically refresh Accessibility & Overlay permission health every time user returns from Settings
+    // Automatically re-check Accessibility & Overlay permissions whenever user returns from Settings
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         viewModel.refreshPermissionHealth(logTransitions = true)
     }
@@ -95,11 +96,18 @@ fun UwesToApp(viewModel: MainViewModel) {
         return
     }
 
+    // Step 1: Onboarding (mandatory permission setup at step 3)
     if (!uiState.settings.onboardingCompleted) {
         OnboardingScreen(
             permissionHealth = uiState.permissionHealth,
             onFinish = { limit -> viewModel.completeOnboarding(limit) }
         )
+        return
+    }
+
+    // Step 2: Hard permission gate — user MUST have both Accessibility & Overlay enabled to enter
+    if (!uiState.permissionHealth.isFullyHealthy) {
+        PermissionGateScreen(permissionHealth = uiState.permissionHealth)
         return
     }
 
@@ -184,14 +192,7 @@ fun UwesToApp(viewModel: MainViewModel) {
                         modifier = Modifier.weight(1f)
                     ) {
                         composable(ROUTE_HOME) {
-                            HomeScreen(
-                                uiState = uiState,
-                                onSelectTestApp = viewModel::selectTestApp,
-                                onSimulateScroll = viewModel::simulateScroll,
-                                onResetToday = viewModel::resetTodayCount,
-                                onToggleTestOverlay = viewModel::toggleTestOverlayPill,
-                                onPreviewBlocker = viewModel::previewBlockerModal
-                            )
+                            HomeScreen(uiState = uiState)
                         }
                         composable(ROUTE_STATS) {
                             StatsScreen(uiState = uiState)
@@ -207,9 +208,7 @@ fun UwesToApp(viewModel: MainViewModel) {
                                 onToggleBlockRule = viewModel::toggleBlockRule,
                                 onToggleBlockRuleStrict = viewModel::toggleBlockRuleStrict,
                                 onAddCustomBlock = viewModel::addCustomBlockRule,
-                                onDeleteBlockRule = viewModel::deleteBlockRule,
-                                onPreviewBlocker = viewModel::previewBlockerModal,
-                                onPreviewBreak = viewModel::previewBreakModal
+                                onDeleteBlockRule = viewModel::deleteBlockRule
                             )
                         }
                         composable(ROUTE_BATTLES) {
