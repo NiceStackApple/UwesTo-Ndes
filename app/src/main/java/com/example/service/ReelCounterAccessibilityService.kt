@@ -22,41 +22,51 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
 /**
- * Strictly scoped AccessibilityService monitoring ONLY the supported short-video packages:
+ * Low-latency, strictly scoped AccessibilityService for:
  * Instagram (+Lite), TikTok (Global/Asia/+Lite), YouTube Shorts, Facebook (+Lite), and Snapchat (+Lite).
- * All counts merge seamlessly into one unified daily total in ReelRepository.
  *
- * Key guarantees:
- * 1. Works across modern YouTube Litho Shorts and obfuscated TikTok ViewPagers as well as IG/FB/SC.
- * 2. Floating counter pill ONLY appears while inside a short-video scroll feed and automatically
- *    vanishes when exiting the scroll feed, switching apps, or locking the screen.
- * 3. Scrolling up & down on the same video NEVER double-counts (directional filter + session
- *    high-water marks + in-memory video content fingerprint LRU deduplication).
+ * Responsiveness + Accuracy Design:
+ * 1. Zero-IPC hot path on TYPE_VIEW_SCROLLED (feed verification cached per window + refreshed lazily)
+ *    and optimistic instant floating-pill update before SQLite flush (~1ms visual feedback).
+ * 2. Instant anti-up-down protection without mid-animation text blocking:
+ *    - Primary: strict High-Water Mark on pager/list index (fromIndex/toIndex) & scrollY.
+ *    - Secondary (for obfuscated/recycled pagers like TikTok & YouTube Litho): backtrackDepth counter
+ *      that absorbs downward re-scrolls after upward swipes until advancing to a brand-new video.
+ * 3. Floating pill ONLY appears inside active short-video scroll feeds and disappears automatically
+ *    when exiting the scroll feed, switching apps, or locking the screen.
  */
 class ReelCounterAccessibilityService : AccessibilityService() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private lateinit var overlayManager: FloatingOverlayManager
 
+    // Live cached repository state so every scroll updates UI immediately with zero blocking .first() calls
+    @Volatile private var cachedTodayCount: Int = 0
+    @Volatile private var cachedDailyLimit: Int = 50
+    @Volatile private var cachedOverlayEnabled: Boolean = true
+
+    // Active feed session cache (eliminates heavy Binder IPC tree walks on every scroll frame)
     private var currentFeedApp: SupportedApp? = null
+    private var isConfirmedInShortFeed: Boolean = false
+    private var lastFeedVerifyMs: Long = 0L
     private var isPillVisible: Boolean = false
     private var watchdogJob: Job? = null
     private var consecutiveNullRootChecks: Int = 0
 
-    // Per-session anti-up-down & deduplication state
-    private var lastScrollEventMs: Long = 0L
+    // Per-session anti-up-down & gesture coalescing state
+    private var lastCountedEventMs: Long = 0L
+    private var lastBackwardEventMs: Long = 0L
     private var lastSeenIndex: Int = -1
     private var maxReachedIndex: Int = -1
     private var lastSeenScrollY: Int = -1
     private var maxReachedScrollY: Int = -1
-    private var lastFingerprintHash: Int = 0
-    private val seenVideoFingerprints = LinkedHashSet<Int>()
+    private var backtrackDepth: Int = 0
+    private var pendingForwardDeltaY: Int = 0
     private var lastBlockerShownMs: Long = 0L
 
     override fun onServiceConnected() {
@@ -64,6 +74,23 @@ class ReelCounterAccessibilityService : AccessibilityService() {
         overlayManager = FloatingOverlayManager(this)
         val repository = (application as UwesToApplication).repository
         repository.setAccessibilityServiceConnected(true)
+
+        // Keep live counts & settings hot in memory for instant zero-lag pill updates
+        serviceScope.launch {
+            repository.todayLogFlow.collect { log ->
+                cachedTodayCount = log.totalCount
+            }
+        }
+        serviceScope.launch {
+            repository.settingsFlow.collect { settings ->
+                cachedDailyLimit = settings.dailyLimit
+                cachedOverlayEnabled = settings.floatingOverlayEnabled
+                if (!settings.floatingOverlayEnabled && isPillVisible) {
+                    overlayManager.hideCounterPill()
+                    isPillVisible = false
+                }
+            }
+        }
         serviceScope.launch {
             repository.logPermissionEvent(
                 eventType = "ACCESSIBILITY_ON",
@@ -83,11 +110,13 @@ class ReelCounterAccessibilityService : AccessibilityService() {
         }
 
         val repository = (application as UwesToApplication).repository
+        val now = System.currentTimeMillis()
 
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
                 val root = rootInActiveWindow
                 val inShortFeed = isStrictlyShortVideoFeed(app, event, root)
+                lastFeedVerifyMs = now
                 if (!inShortFeed) {
                     hideOverlayAndResetSession()
                     return
@@ -97,13 +126,7 @@ class ReelCounterAccessibilityService : AccessibilityService() {
                     resetScrollTracking()
                     currentFeedApp = app
                 }
-
-                // Seed the initial video fingerprint so swiping away & back to video #0 won't re-count
-                val initialHash = computeActiveVideoFingerprint(root)
-                if (initialHash != 0) {
-                    lastFingerprintHash = initialHash
-                    recordSeenFingerprint(initialHash)
-                }
+                isConfirmedInShortFeed = true
 
                 serviceScope.launch {
                     val block = repository.evaluateCurrentFeedBlock(app)
@@ -115,36 +138,55 @@ class ReelCounterAccessibilityService : AccessibilityService() {
 
             AccessibilityEvent.TYPE_VIEW_SCROLLED,
             AccessibilityEvent.TYPE_VIEW_SELECTED -> {
-                val root = rootInActiveWindow
-                if (!isStrictlyShortVideoFeed(app, event, root)) {
-                    if (isPillVisible) {
+                // Fast O(1) rejection for horizontal carousels, comments, chat, and search
+                if (isExcludedScrollEventFast(event)) {
+                    if (isPillVisible && isLikelyNonFeedOverlayEvent(event)) {
                         hideOverlayAndResetSession()
                     }
                     return
                 }
 
-                // Reject horizontal carousels (Stories, photo slides, tabs)
-                if (event.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED &&
-                    event.scrollDeltaX != 0 &&
-                    abs(event.scrollDeltaX) >= abs(event.scrollDeltaY)
-                ) {
-                    return
+                // Use cached feed state on the hot path; only re-verify tree every 1200ms or on app switch
+                val needsVerify = currentFeedApp != app ||
+                    !isConfirmedInShortFeed ||
+                    (now - lastFeedVerifyMs) > FEED_VERIFY_CACHE_MS
+
+                if (needsVerify) {
+                    val root = rootInActiveWindow
+                    val verified = isStrictlyShortVideoFeed(app, event, root)
+                    lastFeedVerifyMs = now
+                    if (!verified) {
+                        if (isPillVisible) hideOverlayAndResetSession()
+                        return
+                    }
+                    if (currentFeedApp != app) {
+                        resetScrollTracking()
+                        currentFeedApp = app
+                    }
+                    isConfirmedInShortFeed = true
                 }
 
-                if (currentFeedApp != app) {
-                    resetScrollTracking()
-                    currentFeedApp = app
-                }
+                val shouldCount = evaluateFastNewVideoScroll(event, now)
 
-                val now = System.currentTimeMillis()
-                val shouldCount = evaluateNewVideoScroll(event, root, now)
+                if (shouldCount) {
+                    // Optimistic instant pill update (~1ms latency!)
+                    val optimisticTotal = cachedTodayCount + 1
+                    cachedTodayCount = optimisticTotal
+                    if (cachedOverlayEnabled) {
+                        showPillAndStartWatchdog(
+                            todayCount = optimisticTotal,
+                            dailyLimit = cachedDailyLimit,
+                            sourceApp = app
+                        )
+                    }
 
-                serviceScope.launch {
-                    val settings = repository.settingsFlow.first()
-                    if (shouldCount) {
+                    // Persist asynchronously & reconcile exact Room count + limits/breaks
+                    serviceScope.launch {
                         val result = repository.incrementScroll(app = app, delta = 1)
-                        if (settings.floatingOverlayEnabled) {
-                            showPillAndStartWatchdog(
+                        cachedTodayCount = result.newTotal
+                        cachedDailyLimit = result.dailyLimit
+                        if (cachedOverlayEnabled && isPillVisible) {
+                            overlayManager.showOrUpdateCounterPill(
                                 todayCount = result.newTotal,
                                 dailyLimit = result.dailyLimit,
                                 sourceApp = app
@@ -159,27 +201,54 @@ class ReelCounterAccessibilityService : AccessibilityService() {
                         if (result.interception !is ActiveInterception.None) {
                             maybeShowBlocker(result.interception)
                         }
-                    } else if (settings.floatingOverlayEnabled && !isPillVisible) {
-                        val todayLog = repository.todayLogFlow.first()
-                        showPillAndStartWatchdog(
-                            todayCount = todayLog.totalCount,
-                            dailyLimit = settings.dailyLimit,
-                            sourceApp = app
-                        )
                     }
+                } else if (cachedOverlayEnabled && !isPillVisible) {
+                    // Show live pill immediately when user starts scrolling inside a confirmed feed
+                    showPillAndStartWatchdog(
+                        todayCount = cachedTodayCount,
+                        dailyLimit = cachedDailyLimit,
+                        sourceApp = app
+                    )
                 }
             }
         }
     }
 
     /**
-     * Evaluates whether a scroll/page-selection event moved forward to a genuinely NEW video.
-     * Supports IG Reels, TikTok VerticalViewPager, YouTube Litho Shorts, FB Reels, and Snapchat
-     * while blocking up-down scrolling on the same video.
+     * Zero-IPC check rejecting horizontal scrolls (Stories/photo carousels) and obvious non-reel lists.
      */
-    private fun evaluateNewVideoScroll(
+    private fun isExcludedScrollEventFast(event: AccessibilityEvent): Boolean {
+        if (event.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED &&
+            event.scrollDeltaX != 0 &&
+            abs(event.scrollDeltaX) >= abs(event.scrollDeltaY)
+        ) {
+            return true
+        }
+        return isLikelyNonFeedOverlayEvent(event)
+    }
+
+    private fun isLikelyNonFeedOverlayEvent(event: AccessibilityEvent): Boolean {
+        val sourceId = event.source?.viewIdResourceName?.lowercase().orEmpty()
+        val className = event.className?.toString()?.lowercase().orEmpty()
+        val desc = event.contentDescription?.toString()?.lowercase().orEmpty()
+        val meta = "$sourceId $className $desc"
+        return meta.contains("comment") ||
+            meta.contains("direct") ||
+            meta.contains("inbox") ||
+            meta.contains("chat") ||
+            meta.contains("message") ||
+            meta.contains("search") ||
+            meta.contains("stories_tray") ||
+            meta.contains("share_sheet")
+    }
+
+    /**
+     * Snappy, zero-IPC scroll progression detector that:
+     * - Reacts immediately on every genuine forward swipe to a new video (420ms swipe coalescing).
+     * - Never double-counts scrolling up & down over the same videos (High-Water Mark + backtrackDepth).
+     */
+    private fun evaluateFastNewVideoScroll(
         event: AccessibilityEvent,
-        root: AccessibilityNodeInfo?,
         nowMs: Long
     ): Boolean {
         val fromIndex = event.fromIndex
@@ -187,167 +256,120 @@ class ReelCounterAccessibilityService : AccessibilityService() {
         val deltaY = event.scrollDeltaY
         val isPageSelected = event.eventType == AccessibilityEvent.TYPE_VIEW_SELECTED
 
-        // 1. Reject backward / upward scroll immediately (NEVER lower high-water marks!)
-        val isBackwardByDelta = deltaY < 0
+        // 1. Detect backward / upward scroll immediately (scrolling back to previous video)
+        val isBackwardByDelta = deltaY < -20
         val isBackwardByIndex = fromIndex >= 0 && lastSeenIndex >= 0 && fromIndex < lastSeenIndex
-        val isBackwardByScrollY = scrollY >= 0 && lastSeenScrollY >= 0 && scrollY < lastSeenScrollY
+        val isBackwardByScrollY = scrollY >= 0 && lastSeenScrollY >= 0 && scrollY < lastSeenScrollY - 20
 
         if (isBackwardByDelta || isBackwardByIndex || isBackwardByScrollY) {
             if (fromIndex >= 0) lastSeenIndex = fromIndex
             if (scrollY >= 0) lastSeenScrollY = scrollY
-            val currentHash = computeActiveVideoFingerprint(root)
-            if (currentHash != 0) lastFingerprintHash = currentHash
+            pendingForwardDeltaY = 0
+
+            // Count distinct upward swipes into backtrackDepth so scrolling back down doesn't re-count
+            if (nowMs - lastBackwardEventMs >= SWIPE_COALESCE_MS) {
+                backtrackDepth = (backtrackDepth + 1).coerceAtMost(50)
+                lastBackwardEventMs = nowMs
+            }
             return false
         }
 
-        // 2. Debounce multi-frame events from a single swipe gesture
-        if (nowMs - lastScrollEventMs < MIN_REEL_INTERVAL_MS) {
-            if (fromIndex >= 0) lastSeenIndex = fromIndex
-            if (scrollY >= 0) lastSeenScrollY = scrollY
-            return false
-        }
+        // 2. Priority Path A: Pager / RecyclerView reports fromIndex
+        if (fromIndex >= 0) {
+            val prevIndex = lastSeenIndex
+            lastSeenIndex = fromIndex
 
-        // 3. Compute in-memory structural fingerprint of the currently visible video
-        val fingerprint = computeActiveVideoFingerprint(root)
-        val hasBrandNewFingerprint = fingerprint != 0 &&
-            fingerprint != lastFingerprintHash &&
-            fingerprint !in seenVideoFingerprints
-
-        // If we got a valid fingerprint and it's already seen, ALWAYS block re-counting!
-        if (fingerprint != 0 && !hasBrandNewFingerprint) {
-            if (fromIndex >= 0) lastSeenIndex = fromIndex
-            if (scrollY >= 0) lastSeenScrollY = scrollY
-            return false
-        }
-
-        // 4. Evaluate forward progression across all Android pager/recycler implementations
-        val progressedForward: Boolean = when {
-            // Case A: Pager / RecyclerView provides fromIndex
-            fromIndex >= 0 -> {
-                lastSeenIndex = fromIndex
-                when {
-                    maxReachedIndex == -1 -> {
-                        maxReachedIndex = fromIndex
-                        fromIndex > 0 || hasBrandNewFingerprint
-                    }
-                    fromIndex > maxReachedIndex -> {
-                        maxReachedIndex = fromIndex
-                        true
-                    }
-                    // Windowed / recycled RecyclerView (common in YouTube Shorts & TikTok)
-                    // where fromIndex stays constant while video content truly changed:
-                    fromIndex == maxReachedIndex && hasBrandNewFingerprint && (deltaY > 0 || isPageSelected) -> {
-                        true
-                    }
-                    else -> false
+            if (maxReachedIndex == -1) {
+                // First scroll event of the feed session!
+                // If user already moved onto index >= 1, count it immediately!
+                maxReachedIndex = fromIndex
+                if (fromIndex > 0) {
+                    lastCountedEventMs = nowMs
+                    backtrackDepth = 0
+                    return true
                 }
+                return false
             }
 
-            // Case B: Vertical scrollY reported without fromIndex
-            scrollY >= 0 -> {
-                lastSeenScrollY = scrollY
-                when {
-                    maxReachedScrollY == -1 -> {
-                        maxReachedScrollY = scrollY
-                        scrollY >= MIN_VERTICAL_SWIPE_PX || hasBrandNewFingerprint
-                    }
-                    scrollY >= maxReachedScrollY + MIN_VERTICAL_SWIPE_PX -> {
-                        maxReachedScrollY = scrollY
-                        true
-                    }
-                    hasBrandNewFingerprint && deltaY >= MIN_VERTICAL_SWIPE_PX -> {
-                        maxReachedScrollY = maxOf(maxReachedScrollY, scrollY)
-                        true
-                    }
-                    else -> false
+            if (fromIndex > maxReachedIndex) {
+                // Strictly beyond session high-water mark -> guaranteed brand-new video!
+                maxReachedIndex = fromIndex
+                backtrackDepth = 0
+                if (nowMs - lastCountedEventMs >= SWIPE_COALESCE_MS) {
+                    lastCountedEventMs = nowMs
+                    return true
                 }
+                return false
             }
 
-            // Case C: Custom ViewPager (TikTok VerticalViewPager) reporting only deltaY or TYPE_VIEW_SELECTED
-            else -> {
-                deltaY >= MIN_VERTICAL_SWIPE_PX || (isPageSelected && hasBrandNewFingerprint)
+            // Still below maxReachedIndex -> user is scrolling back down over already-watched videos
+            if (fromIndex < maxReachedIndex) {
+                if (fromIndex > prevIndex && backtrackDepth > 0) {
+                    backtrackDepth = (backtrackDepth - 1).coerceAtLeast(0)
+                }
+                return false
+            }
+
+            // fromIndex == maxReachedIndex:
+            // Only happens on recycled/windowed pagers (e.g., YouTube Shorts / TikTok keeping index fixed)
+            // Fall through ONLY if there is a strong positive vertical swipe delta or page selection
+            if (deltaY <= 0 && !isPageSelected) {
+                return false
             }
         }
 
-        if (!progressedForward) return false
+        // 3. Priority Path B: scrollY reported without advancing fromIndex
+        if (fromIndex < 0 && scrollY >= 0) {
+            lastSeenScrollY = scrollY
+            if (maxReachedScrollY == -1) {
+                maxReachedScrollY = scrollY
+                if (scrollY >= MIN_SWIPE_DELTA_PX) {
+                    lastCountedEventMs = nowMs
+                    backtrackDepth = 0
+                    return true
+                }
+                return false
+            }
 
-        if (fingerprint != 0) {
-            lastFingerprintHash = fingerprint
-            recordSeenFingerprint(fingerprint)
+            if (scrollY >= maxReachedScrollY + MIN_SWIPE_DELTA_PX) {
+                maxReachedScrollY = scrollY
+                backtrackDepth = 0
+                if (nowMs - lastCountedEventMs >= SWIPE_COALESCE_MS) {
+                    lastCountedEventMs = nowMs
+                    return true
+                }
+                return false
+            }
+
+            // Still inside previously reached scrollY -> do not re-count!
+            return false
         }
-        lastScrollEventMs = nowMs
+
+        // 4. Priority Path C: Delta-Y accumulation & TYPE_VIEW_SELECTED (TikTok VerticalViewPager / Litho Shorts)
+        if (deltaY > 0) {
+            pendingForwardDeltaY += deltaY
+        }
+
+        val triggeredForwardSwipe = pendingForwardDeltaY >= MIN_SWIPE_DELTA_PX || isPageSelected
+        if (!triggeredForwardSwipe) return false
+
+        // Coalesce multi-frame fling events of a single swipe
+        if (nowMs - lastCountedEventMs < SWIPE_COALESCE_MS) {
+            pendingForwardDeltaY = 0
+            return false
+        }
+
+        pendingForwardDeltaY = 0
+
+        // Absorb downward re-scrolls if user previously scrolled UP onto older videos
+        if (backtrackDepth > 0) {
+            backtrackDepth -= 1
+            lastCountedEventMs = nowMs
+            return false
+        }
+
+        lastCountedEventMs = nowMs
         return true
-    }
-
-    private fun recordSeenFingerprint(hash: Int) {
-        if (seenVideoFingerprints.size >= MAX_SEEN_FINGERPRINTS) {
-            val oldest = seenVideoFingerprints.firstOrNull()
-            if (oldest != null) seenVideoFingerprints.remove(oldest)
-        }
-        seenVideoFingerprints.add(hash)
-    }
-
-    /**
-     * Computes a lightweight, in-memory-only hash of non-sensitive video labels (e.g. creator handle,
-     * caption snippet, audio title) purely to recognize when the same video is scrolled back & forth.
-     * Never stored to disk or transmitted anywhere.
-     */
-    private fun computeActiveVideoFingerprint(root: AccessibilityNodeInfo?): Int {
-        if (root == null) return 0
-        val tokens = ArrayList<String>(6)
-        collectShortVideoIdentityTokens(root, tokens, depth = 0)
-        if (tokens.isEmpty()) return 0
-        return tokens.joinToString("|").hashCode()
-    }
-
-    private fun collectShortVideoIdentityTokens(
-        node: AccessibilityNodeInfo?,
-        out: MutableList<String>,
-        depth: Int
-    ) {
-        if (node == null || depth > 9 || out.size >= 5) return
-        val viewId = node.viewIdResourceName?.lowercase().orEmpty()
-        val rawText = node.text?.toString()?.trim().orEmpty()
-        val rawDesc = node.contentDescription?.toString()?.trim().orEmpty()
-        val candidate = if (rawText.isNotEmpty()) rawText else rawDesc
-
-        val isIdentityById = viewId.contains("author") ||
-            viewId.contains("username") ||
-            viewId.contains("channel") ||
-            viewId.contains("title") ||
-            viewId.contains("caption") ||
-            viewId.contains("audio") ||
-            viewId.contains("reel_main") ||
-            viewId.contains("desc")
-
-        // Also capture @handles or distinctive multi-word captions (works on obfuscated TikTok & YouTube Litho!)
-        val isHandleOrCaption = candidate.startsWith("@") ||
-            (candidate.length in 10..70 && candidate.contains(" ") && !isGenericUiChromeLabel(candidate))
-
-        if ((isIdentityById || isHandleOrCaption) && candidate.length in 2..80 && !isDynamicNumber(candidate)) {
-            if (candidate !in out) {
-                out.add(candidate)
-            }
-        }
-
-        val count = node.childCount.coerceAtMost(14)
-        for (i in 0 until count) {
-            collectShortVideoIdentityTokens(node.getChild(i), out, depth + 1)
-            if (out.size >= 5) return
-        }
-    }
-
-    private fun isDynamicNumber(text: String): Boolean {
-        val cleaned = text.replace(",", "").replace(".", "").replace(":", "").trim()
-        return cleaned.all { it.isDigit() || it == 'K' || it == 'M' || it == 'k' || it == 'm' }
-    }
-
-    private fun isGenericUiChromeLabel(text: String): Boolean {
-        val lower = text.lowercase()
-        return lower == "for you" || lower == "untuk anda" || lower == "following" ||
-            lower == "mengikuti" || lower == "home" || lower == "beranda" ||
-            lower == "shorts" || lower == "reels" || lower == "subscriptions" ||
-            lower == "subscribe" || lower == "like this video" || lower == "dislike this video"
     }
 
     private fun showPillAndStartWatchdog(
@@ -366,8 +388,8 @@ class ReelCounterAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Runs ONLY while the floating pill is visible.
-     * Hides the pill immediately when the user exits Reels/TikTok/Shorts, switches to another app,
+     * Lightweight watchdog running ONLY while the floating pill is visible.
+     * Hides the pill immediately when the user exits Reels/TikTok/Shorts, switches apps,
      * or turns off the screen.
      */
     private fun startForegroundWatchdog() {
@@ -399,6 +421,8 @@ class ReelCounterAccessibilityService : AccessibilityService() {
                 if (activeApp == null || !isStrictlyShortVideoFeed(activeApp, null, root)) {
                     hideOverlayAndResetSession()
                     break
+                } else {
+                    lastFeedVerifyMs = System.currentTimeMillis()
                 }
             }
         }
@@ -406,6 +430,7 @@ class ReelCounterAccessibilityService : AccessibilityService() {
 
     private fun hideOverlayAndResetSession() {
         isPillVisible = false
+        isConfirmedInShortFeed = false
         currentFeedApp = null
         consecutiveNullRootChecks = 0
         watchdogJob?.cancel()
@@ -422,14 +447,13 @@ class ReelCounterAccessibilityService : AccessibilityService() {
         maxReachedIndex = -1
         lastSeenScrollY = -1
         maxReachedScrollY = -1
-        lastFingerprintHash = 0
-        seenVideoFingerprints.clear()
+        backtrackDepth = 0
+        pendingForwardDeltaY = 0
     }
 
     /**
-     * Platform-specific verification so short-video feeds on Instagram Reels, TikTok FYP/Following,
-     * YouTube Shorts (including Litho UI), Facebook Reels, and Snapchat Spotlight are all reliably
-     * detected while excluding comments, DMs, search, profiles, and regular home feeds.
+     * Platform-specific short-video feed verification for Instagram Reels, TikTok FYP/Following,
+     * YouTube Shorts (including Litho UI), Facebook Reels, and Snapchat Spotlight.
      */
     private fun isStrictlyShortVideoFeed(
         app: SupportedApp,
@@ -482,7 +506,6 @@ class ReelCounterAccessibilityService : AccessibilityService() {
             }
 
             SupportedApp.TIKTOK -> {
-                // Reject non-feed tabs/screens in TikTok (Profile, Inbox, Shop, Search, Comments)
                 val onExcludedTikTokTab = scan.hasSelectedTab("profile") ||
                     scan.hasSelectedTab("profil") ||
                     scan.hasSelectedTab("inbox") ||
@@ -558,7 +581,7 @@ class ReelCounterAccessibilityService : AccessibilityService() {
         signals: HierarchySignals,
         depth: Int
     ) {
-        if (node == null || depth > 10 || signals.viewIds.size > 120) return
+        if (node == null || depth > 9 || signals.viewIds.size > 90) return
 
         val viewId = node.viewIdResourceName?.lowercase().orEmpty()
         if (viewId.isNotEmpty()) {
@@ -583,19 +606,19 @@ class ReelCounterAccessibilityService : AccessibilityService() {
             if (node.isSelected) signals.selectedTabs.add(desc)
         }
 
-        val count = node.childCount.coerceAtMost(18)
+        val count = node.childCount.coerceAtMost(16)
         for (i in 0 until count) {
             traverseSignals(node.getChild(i), signals, depth + 1)
         }
     }
 
     private fun hasFocusedTextInput(node: AccessibilityNodeInfo?, depth: Int): Boolean {
-        if (node == null || depth > 7) return false
+        if (node == null || depth > 6) return false
         val cls = node.className?.toString().orEmpty()
         if (node.isFocused && (node.isEditable || cls.contains("EditText"))) {
             return true
         }
-        val count = node.childCount.coerceAtMost(12)
+        val count = node.childCount.coerceAtMost(10)
         for (i in 0 until count) {
             if (hasFocusedTextInput(node.getChild(i), depth + 1)) return true
         }
@@ -675,9 +698,9 @@ class ReelCounterAccessibilityService : AccessibilityService() {
     }
 
     companion object {
-        private const val MIN_REEL_INTERVAL_MS = 1000L
-        private const val MIN_VERTICAL_SWIPE_PX = 160
+        private const val SWIPE_COALESCE_MS = 420L
+        private const val MIN_SWIPE_DELTA_PX = 120
+        private const val FEED_VERIFY_CACHE_MS = 1200L
         private const val WATCHDOG_INTERVAL_MS = 400L
-        private const val MAX_SEEN_FINGERPRINTS = 40
     }
 }
