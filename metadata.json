@@ -1,0 +1,6 @@
+{
+  "name": "UwesTo",
+  "description": "Aplikasi Android penghitung scroll Reels & Shorts live dengan visual otak 5 tahap, limit harian, blokir feed, breaks, dan Scroll Battles lokal berbahasa Semarang Timur.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
